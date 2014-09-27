@@ -13,4 +13,4 @@ Use get.html to list all secrets. Fill out the Passphrase and click the secret n
 
 Info
 ====
-All encryption/decryption happens locally on the client, and dropbox is sent the passphrase or raw secret.
+All encryption/decryption happens locally on the client, and dropbox is NEVER sent the passphrase or raw secret.
