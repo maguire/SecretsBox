@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+    
+    <link rel="stylesheet" href="//maxcdn.bootstrapcdn.com/bootstrap/3.2.0/css/bootstrap.min.css">
+    
+    <script src="//cdnjs.cloudflare.com/ajax/libs/dropbox.js/0.10.2/dropbox.min.js"></script>
+    <script src="//cdnjs.cloudflare.com/ajax/libs/jquery/2.1.1/jquery.min.js"></script>
+    <script src="//maxcdn.bootstrapcdn.com/bootstrap/3.2.0/js/bootstrap.min.js"></script>
+    <script src="js/aes.js"></script>
+    
+    <script>
+
+    function init() {
+      var client = new Dropbox.Client({ key: "nab237pvp6f7jum" });
+      client.authenticate(function(error, client) {
+        if (error) { 
+          alert(error);
+          return;
+        }
+      
+      showSecrets(client);        
+        
+      });
+    };
+
+    function showSecrets(client) {
+      client.readdir("/", function(error, entries) {
+        if (error) {
+          return showError(error);  // Something went wrong.
+        }
+        
+        listDiv = $('.list-group')    
+        for (entry in entries) {
+          var a = $(document.createElement('a'));
+          a.attr('class', 'list-group-item');
+          var e = entries[entry]
+          a.on("click", function() {
+            showSecret(client, $(this).text(), $(this)); 
+          });
+          a.text(entries[entry])
+          listDiv.append(a);
+        }
+      });
+    
+    };
+
+    function showSecret(client, e, el) {
+      client.readFile(e, function(error, data) {
+        if (error) {
+          alert(error); 
+        }
+        passphrase = $('#passphrase').val();
+        plaintext = decrypt(data, passphrase);
+        if(plaintext) {
+          el.text(plaintext);
+          el.off();
+        }
+        else {
+          el.append(" <span class='glyphicon glyphicon-exclamation-sign'></span>");
+        }
+      }); 
+    }
+   
+    function decrypt(data, key) {
+       return CryptoJS.AES.decrypt(data, key).toString(CryptoJS.enc.Utf8);
+    }
+
+    $(document).ready(init);
+    </script>  
+  </head>
+
+  <body>
+    <div class="input-group">
+      <span class="input-group-addon"><span class="glyphicon glyphicon-lock"></span></span>
+      <input type="password" class="form-control" placeholder="Passphrase" id="passphrase">
+    </div>
+    <div class="list-group">
+    </div>
+  </body>
+</html>
+
