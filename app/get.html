@@ -7,29 +7,32 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
     
     <link rel="stylesheet" href="//maxcdn.bootstrapcdn.com/bootstrap/3.2.0/css/bootstrap.min.css">
-    
-    <script src="//cdnjs.cloudflare.com/ajax/libs/dropbox.js/0.10.2/dropbox.min.js"></script>
+    <script src="https://sdk.amazonaws.com/js/aws-sdk-2.1282.0.js"></script>
     <script src="//cdnjs.cloudflare.com/ajax/libs/jquery/2.1.1/jquery.min.js"></script>
     <script src="//maxcdn.bootstrapcdn.com/bootstrap/3.2.0/js/bootstrap.min.js"></script>
     <script src="js/aes.js"></script>
     
     <script>
+    Cognito_secretsboxidentitypoolUnauth_Role
+    var bucketName = 'pfmsecretsbox';
+
+    AWS.config.region = 'us-east-1'; // Region
+    AWS.config.credentials = new AWS.CognitoIdentityCredentials({
+        IdentityPoolId: 'IDENTITY_POOL_ID',
+    });
+
 
     function init() {
-      var client = new Dropbox.Client({ key: "nab237pvp6f7jum" });
-      client.authenticate(function(error, client) {
-        if (error) { 
-          alert(error);
-          return;
-        }
-      
-      showSecrets(client);        
-        
+      var client = new AWS.S3({
+        apiVersion: '2006-03-01',
+        params: {Bucket: albumBucketName}
       });
+      
+      showSecrets(client);
     };
 
     function showSecrets(client) {
-      client.readdir("/", function(error, entries) {
+      client.listObjects({Delimiter: '/'}, function(error, entries) {
         if (error) {
           return showError(error);  // Something went wrong.
         }
@@ -50,7 +53,7 @@
     };
 
     function showSecret(client, e, el) {
-      client.readFile(e, function(error, data) {
+      client.getObject(e, function(error, data) {
         if (error) {
           alert(error); 
         }
