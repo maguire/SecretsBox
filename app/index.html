@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+    
+    <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/3.2.0/css/bootstrap.min.css">
+    <script src="https://sdk.amazonaws.com/js/aws-sdk-2.1282.0.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/2.1.1/jquery.min.js"></script>
+    <script src="https://maxcdn.bootstrapcdn.com/bootstrap/3.2.0/js/bootstrap.min.js"></script>
+    <script src="js/aes.js"></script>
+    <script src="js/sha1.js"></script>
+    <script src="js/hmac.js"></script>
+    <script src="js/pbkdf2.js"></script>
+    <script>    
+    // S3 specific functions 
+    var bucketName = '<bucketname>' 
+    var awsIdentityPoolId = '<identityPoolId>';
+    
+    var s3ApiVersion = '2006-03-01';
+    AWS.config.region = 'us-east-1';
+    function retrieveDatabase(ctx, successFn, errorFn) {
+      
+      ctx.client.getObject({Key :"db.json"}, function(error, response) {
+        if(error) {
+          return errorFn(error);
+        }
+        ctx.secretsdb = JSON.parse(response.Body.toString());
+        var keys = ctx.secretsdb.secrets.map(x => x.label).sort();
+        successFn(keys, ctx);
+      });
+    };
+
+    function putDatabase(ctx, masterpass) {
+      // 0. look up the passphrase used to encrypt the credentials
+      var {cipherText, iv, salt} = ctx.secretsdb.secrets.filter(s => s.label == '_aws_secretsbox_write')[0];
+      var {keySize, iterations} = ctx.secretsdb;
+      var awsPass = decrypt(cipherText, iv, masterpass, salt, keySize, iterations)
+ 
+      //1. decrypt AWS creds from ctx.secretsdb.writeCredentials
+      var {cipherText, iv, salt} = ctx.secretsdb.writeCredentials;
+      var writeCredentials = decrypt(cipherText, iv, awsPass, salt, keySize, iterations);
+
+      //2. create new S3 client with write credentials
+      var writeClient = new AWS.S3({
+        apiVersion: s3ApiVersion,
+        params: {Bucket: bucketName},
+        accessKeyId : writeCredentials.split(":")[0],
+        secretAccessKey : writeCredentials.split(":")[1]
+      });
+
+      //3. call putObject with JSON.stringify(ctx.secretsdb)
+      writeClient.putObject({ 
+          Key: "db.json", 
+          Body: JSON.stringify(ctx.secretsdb),
+          ContentType: "application/json"
+        }, function(err, data) {
+          if(err) { alert(err); }
+          retrieveDatabase(ctx, showSecrets, alert);
+        });
+    }
+        
+    function retrieveEncrypted(label, ctx, successFn, errorFn) {
+      if(!ctx.secretsdb) {
+        errorFn("Expected non-empty ctx.secretsdb");
+      }
+
+      var matchingEntries = ctx.secretsdb.secrets.filter(s => s.label == label);
+      if(matchingEntries.length < 1) {
+        errorFn("No secretsdb entry found for label " + label);
+      } 
+      if(matchingEntries.length > 1) {
+        errorFn("More than 1 secretsdb entry found for label " + label);
+      }
+
+      successFn(matchingEntries[0], ctx);
+    };
+    
+    // crypto functions                   
+    function encrypt(msg, pass, keySize = 128, iterations = 100) {
+      var salt = CryptoJS.lib.WordArray.random(128/8);
+
+      var key = CryptoJS.PBKDF2(pass, salt, {
+          keySize: keySize/32,
+          iterations: iterations
+      });
+
+      var iv = CryptoJS.lib.WordArray.random(128/8);
+  
+      var encrypted = CryptoJS.AES.encrypt(msg, key, { 
+        iv: iv, 
+        padding: CryptoJS.pad.Pkcs7,
+        mode: CryptoJS.mode.CBC
+        
+      });
+  
+      return { salt: salt.toString(), iv: iv.toString(), cipherText: encrypted.toString() };
+    }
+    
+   function decrypt(cipherText, iv, pass, salt, keySize = 128, iterations = 100) {
+    
+      var byteSalt = CryptoJS.enc.Hex.parse(salt);
+      var byteIV = CryptoJS.enc.Hex.parse(iv)
+      
+      var key = CryptoJS.PBKDF2(pass, byteSalt, {
+          keySize: keySize/32,
+          iterations: iterations
+        });
+
+      var decrypted = CryptoJS.AES.decrypt(cipherText, key, { 
+        iv: byteIV, 
+        padding: CryptoJS.pad.Pkcs7,
+        mode: CryptoJS.mode.CBC
+        
+      });
+      return decrypted.toString(CryptoJS.enc.Utf8);
+
+    }
+
+    // Display functions 
+    function init() {
+      var ctx = {};
+      ctx.client = new AWS.S3({
+        apiVersion: s3ApiVersion,
+        params: {Bucket: bucketName},
+        credentials : new AWS.CognitoIdentityCredentials({ IdentityPoolId: awsIdentityPoolId })
+      });
+      
+      $(".show-pass-btn").on("click", function() {
+        var passphrase = $($(this).siblings('input')[0]);
+        if(passphrase.attr('type') == 'password') {
+          passphrase.attr('type', 'text');
+        }
+        else {
+          passphrase.attr('type', 'password');
+        }
+      });
+
+      $("#add-pass-btn").on("click", function() {
+        var secret = $('#new-secret-input').val();
+        var masterPass = $('#passphrase').val();
+        var label = $('#new-label-input').val();
+        var {keySize, iterations} = ctx.secretsdb;
+        var encrypted = encrypt(secret, masterPass, keySize, iterations); 
+        encrypted.label = label;
+        ctx.secretsdb.secrets.push(encrypted);
+        //var keys = ctx.secretsdb.secrets.map(x => x.label);
+        //showSecrets(keys, ctx);
+        putDatabase(ctx, masterPass);
+      });
+
+      retrieveDatabase(ctx, showSecrets, alert);
+    }
+   
+    function showSecrets(labels, context) {
+      var listDiv = $('.list-group');
+      listDiv.empty(); 
+      labels.forEach(l => {
+        var a = $(document.createElement('a'));
+        a.attr('class', 'list-group-item');
+        a.on("click", function() {
+          showSecret($(this).text(), $(this), context); 
+        });
+        a.text(l);
+        listDiv.append(a);
+      });
+    }
+
+    function showSecret(label, el, ctx) {
+      var passphrase = $('#passphrase').val();
+      retrieveEncrypted(label.trim(), ctx, encryptedBlock => {
+        var {cipherText, iv, salt} = encryptedBlock;
+        var {keySize, iterations} = ctx.secretsdb;
+        var plaintext = decrypt(cipherText, iv, passphrase, salt, keySize, iterations);
+        if(plaintext) {
+          el.text(plaintext);
+          el.off();
+        }
+        else {
+          el.append(" <span class='glyphicon glyphicon-exclamation-sign'></span>");
+        }
+      }, alert); 
+    }
+
+    $(document).ready(init);
+    </script>  
+  </head>
+
+  <body>
+    <div class="input-group">
+      <span class="input-group-addon"><span class="glyphicon glyphicon-lock"></span></span>
+      <input type="password" class="form-control" placeholder="Passphrase" id="passphrase">
+      <span class="btn input-group-addon show-pass-btn"><span class="glyphicon glyphicon-eye-open"></span></span>
+    </div>
+    <div class="list-group">
+    </div>
+    <div class="input-group">
+      <span id="add-pass-btn" class="btn input-group-addon add-pass-group"><span class="glyphicon glyphicon-plus"></span></span>
+      <input type="text" class="form-control" placeholder="Label" id="new-label-input">
+      <div class="input-group">
+        <input type="password" class="form-control" placeholder="Secret" id="new-secret-input">
+        <span class="btn input-group-addon show-pass-btn"><span class="glyphicon glyphicon-eye-open"></span></span>
+      </div>
+    </div>
+  </body>
+</html>
+
